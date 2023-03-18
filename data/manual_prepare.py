@@ -16,13 +16,14 @@ procedure:
 """
 from __future__ import annotations
 from typing import Iterable, Literal
-import os, shutil, tarfile, logging
+import os, shutil, tarfile, logging, sys
 import numpy as np
 from concurrent.futures import ProcessPoolExecutor, Future
 import tiktoken
 
-logFile = "../logs/man_prepare.log"
-# logFile = "logs/man_prepare.log"
+logDir = os.path.join(os.path.dirname(sys.argv[0]), "..", "logs")
+if not os.path.exists(logDir): os.mkdir(logDir)
+logFile = os.path.join(logDir, "man_prepare.log")
 logging.basicConfig(filename=logFile, level=logging.INFO,
                     format="[%(asctime)s] %(levelname)s %(message)s", encoding="utf-8")
 encoder = tiktoken.get_encoding("gpt2")
@@ -31,6 +32,7 @@ eol_token = encoder.encode_ordinary("\n")[0]
 # eol_token = 198
 HARD_LIMIT = 20 * 1024 * 1024 * 1024 # 20G memory only for files
 
+#region tarball region
 def _process_bytes_to_binary(content:list[bytes])->list[int]:
     result:list[int] = []
     for text in content:
@@ -108,6 +110,7 @@ def process_tars(worker_count:int, tarballs:Iterable[str], root:str, test_rate:f
             train_set.add(nf)
     pool.shutdown()
     logging.info("finish extracting tarballs")
+#endregion tarball region
 
 def _combine_binaries_group(target:str, addons:dict[str, int], root:str, clean:bool=True):
     with open(f"{root}/{target}", "ab") as tgt:
@@ -182,7 +185,8 @@ def check_log(log_file:str, tarballs:set[str], remove_imcomplete:str|None=None) 
             tarballs.remove(file)
     return tarballs
 
-def main(source:str, worker_count:int, test_rate:float=0.0005, pure_text:bool=False)->bool:
+def main(source:str, worker_count:int, test_rate:float=0.0005,*,
+         pure_text:bool=False, continue_with_log:bool=True)->bool:
     """
     :source: src dir to process
     """
@@ -193,20 +197,28 @@ def main(source:str, worker_count:int, test_rate:float=0.0005, pure_text:bool=Fa
         # TODO: process_files
         raise RuntimeError("")
     else:
-        raw_tarballs = set(os.listdir(source))
-        tarballs = check_log(logFile, raw_tarballs.copy())
-        logging.info(f"ignore completed files: {raw_tarballs - tarballs}")
+        raw_tarballs = set([
+            file
+            for file in os.listdir(source)
+            if os.path.isfile(file) and (file.endswith(".tar") or file.count('.')==0)
+            ])
+        if continue_with_log:
+            tarballs = check_log(logFile, raw_tarballs.copy())
+            logging.info(f"ignore completed files: {raw_tarballs - tarballs}")
+        else:
+            tarballs = raw_tarballs
+            logging.info("Do maunal without check logs")
         if len(tarballs) == 0: return True
         logging.info(f"tarballs: {tarballs}")
         process_tars(worker_count, tarballs, source, test_rate)
     return True
 
-def self_host():
+def self_host(datapath:str):
     finish = False
     times = 0
     while not finish:
         try:
-            finish = main("newbio", 16)
+            finish = main(datapath, 16)
             combine_binaries()
         except Exception as e:
             if finish:
@@ -218,6 +230,5 @@ def self_host():
 
 
 if __name__=="__main__":
-    # main("newbio", 3)
+    main(".", 1, continue_with_log=False)
     # combine_binaries()
-    self_host()
